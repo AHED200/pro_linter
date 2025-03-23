@@ -1,0 +1,7 @@
+name: custom_lint_rules
+description: Custom lint rules for bloc best practices
+version: 1.0.0
+
+dependencies:
+  custom_lint:
+    path: ./lib/
