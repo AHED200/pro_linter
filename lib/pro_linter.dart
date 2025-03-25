@@ -1,4 +1,5 @@
 import 'package:custom_lint_builder/custom_lint_builder.dart';
+import 'package:pro_linter/src/avoid_emit_after_await.dart';
 import 'package:pro_linter/src/avoid_print.dart';
 
 PluginBase createPlugin() => _ProLinter();
@@ -9,6 +10,7 @@ class _ProLinter extends PluginBase {
     return <LintRule>[
       // Your custom lint rules go here
       const AvoidPrint(),
+      const AvoidEmitAfterAwait(),
     ];
   }
 
