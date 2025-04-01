@@ -59,7 +59,7 @@ class AvoidEmitAfterAwait extends DartLintRule {
     final hasAwaitBefore = awaitExpressions.any(
       (awaitExpr) => awaitExpr.offset < node.offset,
     );
-    
+
     if (!hasAwaitBefore) return;
 
     // 4. Report if not guarded by isClosed check
@@ -78,140 +78,193 @@ class AvoidEmitAfterAwait extends DartLintRule {
 
   /// Traverse up the AST to check if the node is wrapped in an if-statement that
   /// guards the call with a check like `if (!isClosed)` or equivalent.
-bool _isGuardedByIsClosed(AstNode node) {
-  AstNode? current = node;
-
-  // 1. First check if we're inside a Future callback
-  FunctionExpression? callbackFunction;
-  AstNode? searchNode = node;
-  while (searchNode != null && callbackFunction == null) {
-    if (searchNode is FunctionExpression) {
-      final parent = searchNode.parent;
-      if (parent is ArgumentList && parent.parent is MethodInvocation) {
-        final call = parent.parent as MethodInvocation;
-        final name = call.methodName.staticElement?.name;
-        if (name == 'then' || name == 'whenComplete' || name == 'catchError') {
-          callbackFunction = searchNode;
-          break;
-        }
-      }
-    }
-    searchNode = searchNode.parent;
-  }
-  
-  // 2. If we're inside a Future callback, we MUST have a guard INSIDE the callback
-  if (callbackFunction != null) {
-    // Only check inside this callback function's body
-    if (callbackFunction.body is BlockFunctionBody) {
-      final block = (callbackFunction.body as BlockFunctionBody).block;
-      return _hasIsClosedGuard(block, node.offset);
-    } else if (callbackFunction.body is ExpressionFunctionBody) {
-      final expr = (callbackFunction.body as ExpressionFunctionBody).expression;
-      // Check if the expression body has a guard (like a ternary)
-      if (expr is ConditionalExpression) {
-        final condition = expr.condition.toSource();
-        if (condition.contains('!isClosed') || condition.contains('isNotClosed')) {
-          return _isNodeInside(node, expr.thenExpression);
-        }
-      }
-      // For arrow functions with && checks
-      if (expr is BinaryExpression && expr.operator.type == TokenType.AMPERSAND_AMPERSAND) {
-        final left = expr.leftOperand.toSource();
-        if (left.contains('!isClosed') || left.contains('isNotClosed')) {
+  bool _isGuardedByIsClosed(AstNode node) {
+    // First, check if the emit is directly guarded by an if-statement
+    AstNode? current = node;
+    while (current != null) {
+      if (current is IfStatement) {
+        final condition = current.expression.toSource();
+        if ((condition.contains('!isClosed') ||
+                condition.contains('isNotClosed')) &&
+            _isNodeInside(node, current.thenStatement)) {
           return true;
         }
       }
-      return false;
-    }
-    return false;
-  }
 
-  // 3. For other cases (not in Future callback), proceed with normal checks
-  while (current != null) {
-    // Case 1: Direct guard with if (!isClosed) { emit(...) }
-    if (current is IfStatement) {
-      final condition = current.expression.toSource();
-      if (condition.contains('!isClosed') ||
-          condition.contains('isNotClosed')) {
-        if (_isNodeInside(node, current.thenStatement)) {
-          return true;
-        }
-      }
-    }
+      // Handle early return pattern
+      if (current is Block) {
+        for (final statement in current.statements) {
+          if (statement.offset >= node.offset) break;
 
-    // Case 2: Early return pattern
-    if (current is Block) {
-      for (final statement in current.statements) {
-        if (statement.offset >= node.offset) break;
-        if (statement is IfStatement) {
-          final condition = statement.expression.toSource();
-          if (condition.contains('isClosed') &&
-              !condition.contains('!isClosed')) {
-            if (_containsReturnStatement(statement.thenStatement)) {
-              return true;
+          if (statement is IfStatement) {
+            final condition = statement.expression.toSource();
+            if (condition.contains('isClosed') &&
+                !condition.contains('!isClosed')) {
+              if (_containsReturnStatement(statement.thenStatement)) {
+                return true;
+              }
             }
           }
         }
       }
+
+      current = current.parent;
     }
 
-    // Case 3: Ternary operator
-    if (current is ConditionalExpression) {
-      final condition = current.condition.toSource();
-      if (condition.contains('isClosed')) {
-        final isNegated =
-            condition.contains('!isClosed') ||
-            condition.contains('isNotClosed');
-        if (isNegated && _isNodeInside(node, current.thenExpression)) {
-          return true;
-        } else if (!isNegated &&
-            _isNodeInside(node, current.elseExpression)) {
-          return true;
+    // If not found, trace up to find the containing function
+    // This handles not just direct then() callbacks but any nested function
+    FunctionExpression? containingFunction = _findContainingFunction(node);
+    if (containingFunction != null) {
+      // Found a function - see if the node is inside a guard within this function
+      if (containingFunction.body is BlockFunctionBody) {
+        final block = (containingFunction.body as BlockFunctionBody).block;
+        return _hasIsClosedGuardInBlock(block, node);
+      } else if (containingFunction.body is ExpressionFunctionBody) {
+        final expr =
+            (containingFunction.body as ExpressionFunctionBody).expression;
+
+        // Handle arrow function with conditional
+        if (expr is ConditionalExpression) {
+          final condition = expr.condition.toSource();
+          if (condition.contains('!isClosed') ||
+              condition.contains('isNotClosed')) {
+            return _isNodeInside(node, expr.thenExpression);
+          }
+        }
+
+        // Handle arrow function with && guard
+        if (expr is BinaryExpression &&
+            expr.operator.type == TokenType.AMPERSAND_AMPERSAND) {
+          final left = expr.leftOperand.toSource();
+          if (left.contains('!isClosed') || left.contains('isNotClosed')) {
+            return true;
+          }
+        }
+
+        // Handle nested functions in arrow expressions
+        if (expr is MethodInvocation) {
+          return _checkNestedMethodForGuard(expr, node);
         }
       }
     }
 
-    current = current.parent;
+    return false;
   }
-  return false;
-}
-  /// Checks a Block recursively for any if(!isClosed) or early-return isClosed guard.
-  bool _hasIsClosedGuard(Block block, int emitOffset) {
+
+  // Helper to find the immediate containing function
+  FunctionExpression? _findContainingFunction(AstNode node) {
+    AstNode? current = node;
+    while (current != null) {
+      if (current is FunctionExpression) {
+        return current;
+      }
+      current = current.parent;
+    }
+    return null;
+  }
+
+  // Comprehensive check for guards in a block that might contain the emit
+  bool _hasIsClosedGuardInBlock(Block block, AstNode emitNode) {
+    // Check for direct if-statements guarding the emit
     for (final statement in block.statements) {
-      // Direct guard
       if (statement is IfStatement) {
         final condition = statement.expression.toSource();
-        if (condition.contains('!isClosed') ||
-            condition.contains('isNotClosed')) {
-          return true;
-        }
-        if (condition.contains('isClosed') &&
-            !condition.contains('!isClosed') &&
-            _containsReturnStatement(statement.thenStatement)) {
+        if ((condition.contains('!isClosed') ||
+                condition.contains('isNotClosed')) &&
+            _isNodeInside(emitNode, statement.thenStatement)) {
           return true;
         }
       }
 
-      // If we have nested blocks, visit them too
-      if (statement is Block) {
-        if (_hasIsClosedGuard(statement, emitOffset)) {
-          return true;
-        }
-      } else if (statement is IfStatement) {
-        // Check the if branch
-        if (statement.thenStatement is Block) {
-          if (_hasIsClosedGuard(statement.thenStatement as Block, emitOffset)) {
-            return true;
-          }
-        }
-        // Check the else branch
-        if (statement.elseStatement is Block) {
-          if (_hasIsClosedGuard(statement.elseStatement as Block, emitOffset)) {
+      // Check for early return pattern
+      if (statement.offset < emitNode.offset && statement is IfStatement) {
+        final condition = statement.expression.toSource();
+        if (condition.contains('isClosed') &&
+            !condition.contains('!isClosed')) {
+          if (_containsReturnStatement(statement.thenStatement)) {
             return true;
           }
         }
       }
+
+      // Check nested blocks
+      if (statement is Block) {
+        if (_hasIsClosedGuardInBlock(statement, emitNode)) {
+          return true;
+        }
+      }
+
+      // Check method calls that might contain functions
+      if (statement is ExpressionStatement &&
+          statement.expression is MethodInvocation) {
+        final methodCall = statement.expression as MethodInvocation;
+        if (_checkNestedMethodForGuard(methodCall, emitNode)) {
+          return true;
+        }
+      }
     }
+
+    return false;
+  }
+
+  // Helper to check a method call for guards in its function arguments
+  bool _checkNestedMethodForGuard(
+    MethodInvocation methodCall,
+    AstNode emitNode,
+  ) {
+    // Check each argument for function expressions
+    for (final arg in methodCall.argumentList.arguments) {
+      if (arg is FunctionExpression) {
+        if (arg.body is BlockFunctionBody) {
+          final block = (arg.body as BlockFunctionBody).block;
+          if (_hasIsClosedGuardInBlock(block, emitNode)) {
+            return true;
+          }
+        } else if (arg.body is ExpressionFunctionBody) {
+          final expr = (arg.body as ExpressionFunctionBody).expression;
+
+          // If the expression is a method call (like fold)
+          if (expr is MethodInvocation) {
+            if (_checkNestedMethodForGuard(expr, emitNode)) {
+              return true;
+            }
+          }
+
+          // Handle conditional and binary expressions
+          if (expr is ConditionalExpression) {
+            final condition = expr.condition.toSource();
+            if ((condition.contains('!isClosed') ||
+                    condition.contains('isNotClosed')) &&
+                _isNodeInside(emitNode, expr.thenExpression)) {
+              return true;
+            }
+          }
+          if (expr is BinaryExpression &&
+              expr.operator.type == TokenType.AMPERSAND_AMPERSAND) {
+            final left = expr.leftOperand.toSource();
+            if (left.contains('!isClosed') || left.contains('isNotClosed')) {
+              return true;
+            }
+          }
+        }
+      } else if (arg is NamedExpression &&
+          arg.expression is FunctionExpression) {
+        // Handle named arguments
+        final func = arg.expression as FunctionExpression;
+        if (func.body is BlockFunctionBody) {
+          final block = (func.body as BlockFunctionBody).block;
+          if (_hasIsClosedGuardInBlock(block, emitNode)) {
+            return true;
+          }
+        }
+      } else if (arg is MethodInvocation) {
+        // Recurse for nested method calls
+        if (_checkNestedMethodForGuard(arg, emitNode)) {
+          return true;
+        }
+      }
+    }
+
     return false;
   }
 
@@ -259,8 +312,8 @@ class AddCheckBox extends DartFix {
 
         // Create properly formatted guard with correct indentation
         final replacement =
-            'if (!isClosed) {'
-            ' $emitCall;'
+            'if (!isClosed) {\n'
+            ' $emitCall\n'
             '}';
 
         builder.addSimpleReplacement(
