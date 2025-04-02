@@ -53,6 +53,80 @@ Future<void> someAsyncFunction() async {
 
 ---
 
+
+# GetIt
+
+<details>
+<summary>Check GetIt Instance Registered</summary>
+
+**Lint Name**: `check_get_it_instance_registered`
+
+**Description**:  
+This lint rule ensures that calls to `GetIt.I<T>()` are properly guarded by a check for `isRegistered<T>()` before retrieving the instance. This prevents potential runtime errors caused by attempting to retrieve an unregistered dependency.
+
+---
+
+### Problem
+
+When retrieving instances from GetIt's service locator using `GetIt.I<T>()`, if the type is not registered, it will throw a runtime exception. This lint rule ensures that all retrievals are preceded by a check to ensure the type is registered before accessing it.
+
+---
+
+### Example
+
+#### Bad Code:
+```dart
+void someFunction() {
+  final controller = GetIt.I<Controller>(); // This can throw if Controller is not registered
+  controller.doSomething();
+}
+```
+
+#### Good Code:
+```dart
+void someFunction() {
+  if (GetIt.I.isRegistered<Controller>()) {
+    final controller = GetIt.I<Controller>(); // Safe to retrieve
+    controller.doSomething();
+  }
+}
+```
+
+#### Alternative Good Code:
+```dart
+void someFunction() {
+  if (!GetIt.I.isRegistered<Controller>()) return;
+  
+  final controller = GetIt.I<Controller>(); // Safe to retrieve
+  controller.doSomething();
+}
+```
+
+---
+
+### Fix
+
+The lint rule provides an automatic fix that wraps the `GetIt.I<T>()` call in an `if (GetIt.I.isRegistered<T>())` check.
+
+#### Example Fix:
+##### Input:
+```dart
+final controller = GetIt.I<Controller>();
+controller.doSomething();
+```
+
+##### Output:
+```dart
+if (GetIt.I.isRegistered<Controller>()) {
+  final controller = GetIt.I<Controller>();
+  controller.doSomething();
+}
+```
+
+</details>
+
+---
+
 # Hive
 
 <details>
@@ -114,6 +188,39 @@ box.put('key', 'value');
 if (box.isOpen) {
   box.put('key', 'value');
 }
+```
+
+</details>
+
+
+
+<details>
+<summary>Avoid Dynamic Hive Box</summary>
+
+**Lint Name**: `avoid_dynamic_hive_box`
+
+**Description**:  
+This lint rule ensures that Hive boxes are created with explicit type parameters rather than using implicit dynamic types. This promotes type safety and prevents potential runtime errors caused by storing or retrieving values of unexpected types.
+
+---
+
+### Problem
+
+When creating Hive boxes without specifying type parameters (e.g., `Hive.openBox('myBox')` instead of `Hive.openBox<String>('myBox')`), the box defaults to using `dynamic` types. This can lead to type errors at runtime when accessing data and bypasses Dart's static type checking, making your code less safe and harder to maintain.
+
+---
+
+### Example
+
+#### Bad Code:
+```dart
+final box = await Hive.openBox('settings');
+final lazyBox = await Hive.openLazyBox('contacts');
+```
+#### Good Code:
+```dart
+final box = await Hive.openBox<String>('settings');
+final lazyBox = await Hive.openLazyBox<Contact>('contacts');
 ```
 
 </details>
@@ -184,6 +291,8 @@ Flexible(
 </details>
 
 ---
+
+
 
 ## Enabling the Rules
 
