@@ -307,13 +307,15 @@ class AddCheckBox extends DartFix {
 
       // Apply the fix
       changeBuilder.addDartFileEdit((builder) {
-        // Get the original emit call and its indentation
-        final emitCall = node.toSource();
+        final statement = node.thisOrAncestorOfType<ExpressionStatement>();
+        if (statement == null) return;
+
+        final originalCode = statement.toSource();
 
         // Create properly formatted guard with correct indentation
         final replacement =
             'if (!isClosed) {\n'
-            ' $emitCall\n'
+            ' $originalCode\n'
             '}';
 
         builder.addSimpleReplacement(
