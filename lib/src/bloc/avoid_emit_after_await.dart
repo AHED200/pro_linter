@@ -291,7 +291,49 @@ class AvoidEmitAfterAwait extends DartLintRule {
   }
 
   @override
-  List<Fix> getFixes() => [AddCheckBox()];
+  List<Fix> getFixes() => [AddTernaryCheckFix(), AddCheckBox()];
+}
+
+class AddTernaryCheckFix extends DartFix {
+  @override
+  void run(
+    CustomLintResolver resolver,
+    ChangeReporter reporter,
+    CustomLintContext context,
+    AnalysisError analysisError,
+    List<AnalysisError> others,
+  ) {
+    // Find the method invocation node that caused the lint
+    context.registry.addMethodInvocation((node) {
+      if (!analysisError.sourceRange.intersects(node.sourceRange)) return;
+
+      // Make sure this is an emit statement
+      if (node.methodName.name != 'emit') return;
+
+      // Create a builder for the fix
+      final changeBuilder = reporter.createChangeBuilder(
+        message: 'Use ternary check (isClosed ? null : emit)',
+        priority: 2, // Lower priority than block-style fix
+      );
+
+      // Apply the fix
+      changeBuilder.addDartFileEdit((builder) {
+        final statement = node.thisOrAncestorOfType<ExpressionStatement>();
+        if (statement == null) return;
+
+        // Get just the emit expression, not the whole statement
+        final emitSource = node.toSource();
+
+        // Create the ternary expression
+        final replacement = 'isClosed ? null : $emitSource';
+
+        builder.addSimpleReplacement(
+          SourceRange(node.offset, node.length),
+          replacement,
+        );
+      });
+    });
+  }
 }
 
 class AddCheckBox extends DartFix {
