@@ -82,6 +82,17 @@ class AvoidEmitAfterAwait extends DartLintRule {
     // First, check if the emit is directly guarded by an if-statement
     AstNode? current = node;
     while (current != null) {
+      // Check for ternary with isClosed in condition: isClosed ? null : emit
+      if (current is ConditionalExpression) {
+        final condition = current.condition.toSource();
+        // Check if emit is in the else branch and condition is "isClosed" (not negated)
+        if (condition.contains('isClosed') &&
+            !condition.contains('!isClosed') &&
+            _isNodeInside(node, current.elseExpression)) {
+          return true;
+        }
+      }
+
       if (current is IfStatement) {
         final condition = current.expression.toSource();
         if ((condition.contains('!isClosed') ||
