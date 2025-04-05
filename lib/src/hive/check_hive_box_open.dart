@@ -144,9 +144,76 @@ class CheckHiveBoxIsOpen extends DartLintRule {
   }
 
   @override
-  List<Fix> getFixes() => [AddHiveBoxOpenCheck()];
+  List<Fix> getFixes() => [AddTernaryOpenCheck(), AddHiveBoxOpenCheck()];
 }
 
+class AddTernaryOpenCheck extends DartFix {
+  @override
+  void run(
+    CustomLintResolver resolver,
+    ChangeReporter reporter,
+    CustomLintContext context,
+    AnalysisError analysisError,
+    List<AnalysisError> others,
+  ) {
+    // Look for the Hive box modifying method invocation that triggered the lint.
+    context.registry.addMethodInvocation((node) {
+      if (!analysisError.sourceRange.intersects(node.sourceRange)) return;
+
+      // Check that the method is one of the modifying methods.
+      const modifyingMethods = {
+        'put',
+        'putAll',
+        'delete',
+        'deleteAll',
+        'add',
+        'addAll',
+        'clear',
+      };
+
+      if (!modifyingMethods.contains(node.methodName.name)) return;
+
+      // Ensure that we have a receiver for the method invocation.
+      final receiver = node.target;
+      if (receiver == null) return;
+
+      // Create a change builder for the quick fix.
+      final changeBuilder = reporter.createChangeBuilder(
+        message: 'Wrap Hive box operation with (isClosed? null : operation)',
+        priority: 1,
+      );
+
+      changeBuilder.addDartFileEdit((builder) {
+        final statement = node.thisOrAncestorOfType<ExpressionStatement>();
+        if (statement == null) return;
+
+        final receiverSource = receiver.toSource();
+        final originalCode = statement.toSource();
+
+        // Check if using null-safe operator
+        final usesNullSafe = node.operator?.type == TokenType.QUESTION_PERIOD;
+
+        // Create appropriate isOpen check based on null-safety
+        String isOpenCheck;
+        if (usesNullSafe) {
+          // For null-safe operations, add null check to isOpen as well
+          isOpenCheck = '($receiverSource?.isOpen ?? false)';
+        } else {
+          // For regular operations, use simple isOpen check
+          isOpenCheck = '$receiverSource.isOpen';
+        }
+
+        // Build replacement with proper indentation
+        final replacement = '$isOpenCheck ? null : $originalCode';
+
+        builder.addSimpleReplacement(
+          SourceRange(statement.offset, statement.length),
+          replacement,
+        );
+      });
+    });
+  }
+}
 class AddHiveBoxOpenCheck extends DartFix {
   @override
   void run(
