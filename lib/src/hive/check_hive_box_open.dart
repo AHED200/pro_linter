@@ -204,7 +204,7 @@ class AddTernaryOpenCheck extends DartFix {
         }
 
         // Build replacement with proper indentation
-        final replacement = '$isOpenCheck ? null : $originalCode';
+        final replacement = '$isOpenCheck ? $originalCode : null;';
 
         builder.addSimpleReplacement(
           SourceRange(statement.offset, statement.length),
